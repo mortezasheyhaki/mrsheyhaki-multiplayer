@@ -601,6 +601,8 @@ export const roomManager = {
     if (error) return { ok: false, error };
     const r = placeMark(game, playerId, cell);
     if (!r.ok) return r;
+    // a finished game leaves the room "ended", so the lobby can start a new game
+    if (r.over) room.status = "ended";
     return { ok: true, ...r, room: publicRoom(room), roomCode: room.code };
   },
 
@@ -611,6 +613,7 @@ export const roomManager = {
     if (room.hostId !== playerId) return { ok: false, error: "Only the host can start a rematch" };
     if (game.phase !== "over") return { ok: false, error: "The game is still going" };
     room.game = createTTTState(game.players);
+    room.status = "playing";
     return { ok: true, room: publicRoom(room), roomCode: room.code };
   },
 
