@@ -76,7 +76,7 @@ export function attachSocket(io) {
     socket.emit("server:hello", {
       ok: true,
       phase: 4,
-      features: ["family-words"],
+      features: ["family-words", "tictactoe-should"],
       message: "Authenticated multiplayer server — A or An + Snakes & Ladders ready",
       player: {
         id: player.id,
@@ -375,6 +375,50 @@ socket.on("game:start", (payload, ack) => {
       if (typeof ack === "function") ack(result);
       // everyone answered: show the next picture after a short pause
       if (result.everyoneAnswered) scheduleFamilyNext(io, result.roomCode, 1200);
+    });
+
+    // ── Tic-Tac-Toe (Should) ───────────────────────────────────────
+
+    function tttReply(io, socket, result, ack) {
+      if (!result.ok) {
+        socket.emit("room:error", { error: result.error });
+        if (typeof ack === "function") ack(result);
+        return false;
+      }
+      if (result.room) emitRoom(io, result.room);
+      if (typeof ack === "function") ack(result);
+      return true;
+    }
+
+    socket.on("ttt:start", (_payload, ack) => {
+      const result = roomManager.startGame(player.id, { gameType: "tictactoe-should" });
+      if (!result.ok) {
+        socket.emit("room:error", { error: result.error });
+        if (typeof ack === "function") ack(result);
+        return;
+      }
+      emitRoom(io, result.room);
+      if (typeof ack === "function") ack(result);
+    });
+
+    socket.on("ttt:rps", (payload, ack) => {
+      tttReply(io, socket, roomManager.tttRps(player.id, payload?.choice), ack);
+    });
+
+    socket.on("ttt:answer", (payload, ack) => {
+      tttReply(io, socket, roomManager.tttAnswer(player.id, payload || {}), ack);
+    });
+
+    socket.on("ttt:cant", (_payload, ack) => {
+      tttReply(io, socket, roomManager.tttCantAnswer(player.id), ack);
+    });
+
+    socket.on("ttt:mark", (payload, ack) => {
+      tttReply(io, socket, roomManager.tttMark(player.id, payload?.cell), ack);
+    });
+
+    socket.on("ttt:rematch", (_payload, ack) => {
+      tttReply(io, socket, roomManager.tttRematch(player.id), ack);
     });
 
     socket.on("disconnect", (reason) => {

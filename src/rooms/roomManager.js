@@ -34,6 +34,14 @@ import {
   pickQuestion as slPickQuestion,
   answerQuestion as slAnswerQuestion,
 } from "../games/snakesLadders.js";
+import {
+  createTTTState,
+  rpsChoose,
+  answerQuestion,
+  cantAnswer,
+  placeMark,
+  publicTTT,
+} from "../games/shouldTicTacToe.js";
 
 /** @type {Map<string, object>} */
 const rooms = new Map();
@@ -61,6 +69,11 @@ function publicRoom(room) {
     familySettings: room.familySettings || { timeLimit: FW_DEFAULT_SECONDS, gameType: "family-words" },
     familyGames: FAMILY_GAME_CHOICES,
   };
+
+  if (room.game && room.game.type === "tictactoe-should") {
+    base.game = publicTTT(room.game);
+    return base;
+  }
 
   if (isFamilyGame(room.game)) {
     base.game = publicFamilyState(room.game, room.players);
@@ -355,6 +368,17 @@ export const roomManager = {
 
     const gameType = settings.gameType || room.gameType || "a-an-swipe";
 
+    if (gameType === "tictactoe-should") {
+      if (room.players.length !== 2) {
+        return { ok: false, error: "Tic-Tac-Toe needs exactly 2 players" };
+      }
+      room.game = createTTTState(room.players.map((p) => p.id));
+      room.gameType = "tictactoe-should";
+      room.status = "playing";
+      room.players.forEach((p) => { p.ready = false; });
+      return { ok: true, room: publicRoom(room) };
+    }
+
     if (FAMILY_GAMES.includes(gameType)) {
       const timeLimit = normalizeTimeLimit(
         settings.timeLimit || (room.familySettings && room.familySettings.timeLimit) || FW_DEFAULT_SECONDS
@@ -538,6 +562,57 @@ export const roomManager = {
   },
 
   // ─── Family Words ────────────────────────────────────────────────
+
+  // ─── Tic-Tac-Toe (Should) ────────────────────────────────────────
+
+  tttGame(playerId) {
+    const room = findRoomByPlayerId(playerId);
+    if (!room) return { error: "Not in a room" };
+    if (!room.game || room.game.type !== "tictactoe-should") return { error: "No Tic-Tac-Toe game running" };
+    return { room, game: room.game };
+  },
+
+  tttRps(playerId, choice) {
+    const { room, game, error } = this.tttGame(playerId);
+    if (error) return { ok: false, error };
+    const r = rpsChoose(game, playerId, choice);
+    if (!r.ok) return r;
+    return { ok: true, ...r, room: publicRoom(room), roomCode: room.code };
+  },
+
+  tttAnswer(playerId, payload) {
+    const { room, game, error } = this.tttGame(playerId);
+    if (error) return { ok: false, error };
+    const r = answerQuestion(game, playerId, payload);
+    if (!r.ok) return r;
+    return { ok: true, ...r, room: publicRoom(room), roomCode: room.code };
+  },
+
+  tttCantAnswer(playerId) {
+    const { room, game, error } = this.tttGame(playerId);
+    if (error) return { ok: false, error };
+    const r = cantAnswer(game, playerId);
+    if (!r.ok) return r;
+    return { ok: true, ...r, room: publicRoom(room), roomCode: room.code };
+  },
+
+  tttMark(playerId, cell) {
+    const { room, game, error } = this.tttGame(playerId);
+    if (error) return { ok: false, error };
+    const r = placeMark(game, playerId, cell);
+    if (!r.ok) return r;
+    return { ok: true, ...r, room: publicRoom(room), roomCode: room.code };
+  },
+
+  /** Host plays again: same two players, new shuffled questions. */
+  tttRematch(playerId) {
+    const { room, game, error } = this.tttGame(playerId);
+    if (error) return { ok: false, error };
+    if (room.hostId !== playerId) return { ok: false, error: "Only the host can start a rematch" };
+    if (game.phase !== "over") return { ok: false, error: "The game is still going" };
+    room.game = createTTTState(game.players);
+    return { ok: true, room: publicRoom(room), roomCode: room.code };
+  },
 
   fwAnswer(playerId, choice) {
     const room = findRoomByPlayerId(playerId);
