@@ -75,8 +75,9 @@ export function attachSocket(io) {
 
     socket.emit("server:hello", {
       ok: true,
-      phase: 3,
-      message: "Authenticated multiplayer server — A or An Swipe ready",
+      phase: 4,
+      features: ["family-words"],
+      message: "Authenticated multiplayer server — A or An + Snakes & Ladders ready",
       player: {
         id: player.id,
         username: player.username,
@@ -92,12 +93,16 @@ export function attachSocket(io) {
 
     // ── Lobby ──────────────────────────────────────────────────────
 
-    socket.on("room:create", (_payload, ack) => {
+    socket.on("room:create", (payload, ack) => {
       const result = roomManager.createRoom(player, socket.id);
       if (!result.ok) {
         socket.emit("room:error", { error: result.error });
         if (typeof ack === "function") ack(result);
         return;
+      }
+      if (payload?.gameType) {
+        const gt = roomManager.setGameType(player.id, payload.gameType);
+        if (gt.ok) result.room = gt.room;
       }
       socket.join(roomChannel(result.room.code));
       socket.emit("room:update", result.room);
@@ -148,10 +153,27 @@ export function attachSocket(io) {
 
     // ── Game (Phase 3) ─────────────────────────────────────────────
 
-    socket.on("game:start", (payload, ack) => {
+    
+    // Dedicated Snakes & Ladders start (avoids A/An path entirely)
+    socket.on("sl:start", (payload, ack) => {
+      const result = roomManager.startGame(player.id, { gameType: "snakes-ladders", level: payload?.level });
+      if (!result.ok) {
+        socket.emit("room:error", { error: result.error });
+        if (typeof ack === "function") ack(result);
+        return;
+      }
+      const room = result.room;
+      emitRoom(io, room);
+      io.to(roomChannel(room.code)).emit("sl:update", { sl: result.sl || room.game });
+      console.log(`[game] ${brief} started Snakes & Ladders (sl:start) in ${room.code}`);
+      if (typeof ack === "function") ack(result);
+    });
+
+socket.on("game:start", (payload, ack) => {
       const settings = {};
       if (payload?.questionCount) settings.questionCount = Number(payload.questionCount);
       if (payload?.timePerQuestion) settings.timePerQuestion = Number(payload.timePerQuestion);
+      if (payload?.gameType) settings.gameType = payload.gameType;
 
       const result = roomManager.startGame(player.id, settings);
       if (!result.ok) {
@@ -163,15 +185,24 @@ export function attachSocket(io) {
       const room = result.room;
       emitRoom(io, room);
 
-      // Broadcast first question to the whole room
+      // Snakes & Ladders — no question timer / A-An events
+      if (room.game && room.game.type === "snakes-ladders") {
+        io.to(roomChannel(room.code)).emit("sl:update", { sl: result.sl || room.game });
+        console.log(`[game] ${brief} started Snakes & Ladders in ${room.code}`);
+        if (typeof ack === "function") ack(result);
+        return;
+      }
+
+      // A or An Swipe
       io.to(roomChannel(room.code)).emit("game:question", result.question);
       io.to(roomChannel(room.code)).emit("game:scoreboard", result.scoreboard);
 
       console.log(`[game] ${brief} started A/An in ${room.code}`);
       if (typeof ack === "function") ack(result);
 
-      // Auto-advance when time is up
-      scheduleQuestionTimer(io, room.code, result.question.timeLimit);
+      if (result.question && result.question.timeLimit) {
+        scheduleQuestionTimer(io, room.code, result.question.timeLimit);
+      }
     });
 
     socket.on("game:answer", (payload, ack) => {
@@ -231,6 +262,121 @@ export function attachSocket(io) {
       console.log(`[game] ${brief} returned room ${result.room.code} to lobby`);
     });
 
+    
+    // ── Snakes & Ladders ───────────────────────────────────────────
+    socket.on("room:setGameType", (payload, ack) => {
+      const result = roomManager.setGameType(player.id, payload?.gameType);
+      if (!result.ok) {
+        socket.emit("room:error", { error: result.error });
+        if (typeof ack === "function") ack(result);
+        return;
+      }
+      emitRoom(io, result.room);
+      if (typeof ack === "function") ack(result);
+    });
+
+    socket.on("sl:roll", (_payload, ack) => {
+      const result = roomManager.slRoll(player.id);
+      if (!result.ok) {
+        socket.emit("room:error", { error: result.error });
+        if (typeof ack === "function") ack(result);
+        return;
+      }
+      emitRoom(io, result.room);
+      io.to(roomChannel(result.room.code)).emit("sl:update", {
+        sl: result.sl,
+        events: result.events || [],
+      });
+      if (typeof ack === "function") ack(result);
+    });
+
+    socket.on("sl:pick", (payload, ack) => {
+      const result = roomManager.slPick(player.id, payload?.questionId);
+      if (!result.ok) {
+        socket.emit("room:error", { error: result.error });
+        if (typeof ack === "function") ack(result);
+        return;
+      }
+      emitRoom(io, result.room);
+      io.to(roomChannel(result.room.code)).emit("sl:update", { sl: result.sl });
+      if (typeof ack === "function") ack(result);
+    });
+
+    socket.on("sl:answer", (payload, ack) => {
+      const result = roomManager.slAnswer(player.id, payload);
+      if (!result.ok) {
+        socket.emit("room:error", { error: result.error });
+        if (typeof ack === "function") ack(result);
+        return;
+      }
+      emitRoom(io, result.room);
+      io.to(roomChannel(result.room.code)).emit("sl:update", {
+        sl: result.sl,
+        correct: result.correct,
+        answer: result.answer,
+      });
+      if (typeof ack === "function") ack(result);
+    });
+
+
+    // ── Family Words (Picture Match) ───────────────────────────────
+
+    socket.on("fw:settings", (payload, ack) => {
+      // payload: { timeLimit?, gameType? } — the host picks the game and the time
+      const result = roomManager.setFamilySettings(player.id, payload || {});
+      if (!result.ok) {
+        socket.emit("room:error", { error: result.error });
+        if (typeof ack === "function") ack(result);
+        return;
+      }
+      emitRoom(io, result.room);
+      if (typeof ack === "function") ack(result);
+    });
+
+    socket.on("fw:start", (_payload, ack) => {
+      const raw = roomManager.getRawRoomForPlayer(player.id);
+      const gameType = (raw && raw.familySettings && raw.familySettings.gameType) || "family-words";
+      const result = roomManager.startGame(player.id, { gameType });
+      if (!result.ok) {
+        socket.emit("room:error", { error: result.error });
+        if (typeof ack === "function") ack(result);
+        return;
+      }
+      const room = result.room;
+      emitRoom(io, room);
+      io.to(roomChannel(room.code)).emit("fw:question", {
+        question: result.question,
+        endsAt: result.endsAt,
+        timeLimit: result.timeLimit,
+      });
+      io.to(roomChannel(room.code)).emit("fw:scoreboard", { scoreboard: result.scoreboard });
+      scheduleFamilyEnd(io, room.code, result.timeLimit);
+      console.log(`[game] ${brief} started ${gameType} in ${room.code} (${result.timeLimit}s)`);
+      if (typeof ack === "function") ack(result);
+    });
+
+    socket.on("fw:answer", (payload, ack) => {
+      const result = roomManager.fwAnswer(player.id, payload?.choice);
+      if (!result.ok) {
+        socket.emit("room:error", { error: result.error });
+        if (typeof ack === "function") ack(result);
+        return;
+      }
+      // the player who answered gets their own result straight away
+      socket.emit("fw:result", {
+        correct: result.correct,
+        points: result.points,
+        label: result.label,
+        audio: result.audio,
+        ms: result.ms,
+      });
+      io.to(roomChannel(result.roomCode)).emit("fw:scoreboard", { scoreboard: result.scoreboard });
+      emitRoom(io, result.room);
+      if (typeof ack === "function") ack(result);
+      // everyone answered: show the next picture after a short pause
+      if (result.everyoneAnswered) scheduleFamilyNext(io, result.roomCode, 1200);
+    });
+
     socket.on("disconnect", (reason) => {
       console.log(`[socket] ${brief} disconnected (${reason})`);
       const info = roomManager.markDisconnected(socket.id);
@@ -279,4 +425,58 @@ function doNextQuestion(io, roomCode) {
 
   scheduleQuestionTimer(io, roomCode, result.question.timeLimit);
   return result;
+}
+
+// ── Family Words timers (in-memory) ───────────────────────────────
+const familyTimers = new Map(); // room code -> { end, next }
+
+function familyEntry(code) {
+  if (!familyTimers.has(code)) familyTimers.set(code, {});
+  return familyTimers.get(code);
+}
+
+function scheduleFamilyEnd(io, roomCode, seconds) {
+  const entry = familyEntry(roomCode);
+  if (entry.end) clearTimeout(entry.end);
+  entry.end = setTimeout(() => endFamily(io, roomCode), Math.max(1, Number(seconds) || 90) * 1000 + 300);
+}
+
+function scheduleFamilyNext(io, roomCode, ms) {
+  const entry = familyEntry(roomCode);
+  if (entry.next) clearTimeout(entry.next);
+  entry.next = setTimeout(() => doFamilyNext(io, roomCode), ms);
+}
+
+function clearFamilyTimers(roomCode) {
+  const entry = familyTimers.get(roomCode);
+  if (!entry) return;
+  if (entry.end) clearTimeout(entry.end);
+  if (entry.next) clearTimeout(entry.next);
+  familyTimers.delete(roomCode);
+}
+
+function endFamily(io, roomCode) {
+  clearFamilyTimers(roomCode);
+  const r = roomManager.fwForceEnd(roomCode);
+  if (!r.ok) return;
+  io.to(roomChannel(roomCode)).emit("fw:end", { scoreboard: r.scoreboard });
+  io.to(roomChannel(roomCode)).emit("room:update", r.room);
+  console.log(`[game] Family Words in ${roomCode} finished (time)`);
+}
+
+function doFamilyNext(io, roomCode) {
+  const entry = familyTimers.get(roomCode);
+  if (entry && entry.next) { clearTimeout(entry.next); entry.next = null; }
+  const r = roomManager.fwNext(roomCode);
+  if (!r.ok) return;
+  if (r.finished) {
+    clearFamilyTimers(roomCode);
+    io.to(roomChannel(roomCode)).emit("fw:end", { scoreboard: r.scoreboard });
+    io.to(roomChannel(roomCode)).emit("room:update", r.room);
+    console.log(`[game] Family Words in ${roomCode} finished (all pictures)`);
+    return;
+  }
+  io.to(roomChannel(roomCode)).emit("fw:question", { question: r.question });
+  io.to(roomChannel(roomCode)).emit("fw:scoreboard", { scoreboard: r.scoreboard });
+  io.to(roomChannel(roomCode)).emit("room:update", r.room);
 }
