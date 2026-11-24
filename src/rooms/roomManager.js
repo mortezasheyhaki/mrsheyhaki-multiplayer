@@ -129,6 +129,16 @@ function publicFamilyState(game, players) {
   };
 }
 
+/** A finished game leaves the room "ended". Starting or changing a game should work
+ *  from that state too, so a finished room goes back to the lobby first. */
+function ensureLobby(room) {
+  if (room.status === "ended") {
+    room.status = "lobby";
+    room.game = null;
+  }
+  return room.status === "lobby";
+}
+
 function findRoomByPlayerId(playerId) {
   for (const room of rooms.values()) {
     if (room.players.some((p) => p.id === playerId)) return room;
@@ -219,7 +229,7 @@ export const roomManager = {
 
     const room = rooms.get(code);
     if (!room) return { ok: false, error: "Room not found" };
-    if (room.status !== "lobby") {
+    if (!ensureLobby(room)) {
       return { ok: false, error: "Game already started" };
     }
     if (room.players.length >= room.maxPlayers) {
@@ -255,7 +265,7 @@ export const roomManager = {
   setReady(playerId, ready) {
     const room = findRoomByPlayerId(playerId);
     if (!room) return { ok: false, error: "Not in a room" };
-    if (room.status !== "lobby") {
+    if (!ensureLobby(room)) {
       return { ok: false, error: "Cannot change ready during a game" };
     }
     const p = room.players.find((x) => x.id === playerId);
@@ -279,7 +289,7 @@ export const roomManager = {
     const room = findRoomByPlayerId(playerId);
     if (!room) return { ok: false, error: "Not in a room" };
     if (room.hostId !== playerId) return { ok: false, error: "Only host can set game type" };
-    if (room.status !== "lobby") return { ok: false, error: "Game already started" };
+    if (!ensureLobby(room)) return { ok: false, error: "Game already started" };
     room.gameType = gameType || "a-an-swipe";
     if (gameType === "snakes-ladders") room.maxPlayers = 4;
     else room.maxPlayers = config.maxPlayersPerRoom;
@@ -291,7 +301,7 @@ export const roomManager = {
     const room = findRoomByPlayerId(playerId);
     if (!room) return { ok: false, error: "Not in a room" };
     if (room.hostId !== playerId) return { ok: false, error: "Only the host can change the game settings" };
-    if (room.status !== "lobby") return { ok: false, error: "Game already started" };
+    if (!ensureLobby(room)) return { ok: false, error: "Game already started" };
     const current = room.familySettings || { timeLimit: FW_DEFAULT_SECONDS, gameType: "family-words" };
     const gameType = FAMILY_GAMES.includes(settings.gameType) ? settings.gameType : current.gameType;
     const timeLimit = settings.timeLimit != null ? normalizeTimeLimit(settings.timeLimit) : current.timeLimit;
@@ -336,7 +346,7 @@ export const roomManager = {
     if (room.hostId !== playerId) {
       return { ok: false, error: "Only the host can start the game" };
     }
-    if (room.status !== "lobby") {
+    if (!ensureLobby(room)) {
       return { ok: false, error: "Game already in progress or finished" };
     }
     if (room.players.length < 1) {
