@@ -106,6 +106,7 @@ export function createTTTState(playerIds) {
     rps: {},                 // playerId -> choice (current round)
     rpsNote: "",             // e.g. "Tie! Play again"
     lastRps: null,           // both hands of the last round (shown after both chose)
+    rpsRound: 0,             // counts rock-paper-scissors rounds (ties start a new round)
     xId: null,               // the winner of rock-paper-scissors (starts with X)
     deck: buildDeck(),
     deckPos: 0,
@@ -137,6 +138,7 @@ export function rpsChoose(game, playerId, choice) {
   if (x === y) {
     game.lastRps = { ...game.rps };
     game.rps = {};
+    game.rpsRound = (game.rpsRound || 0) + 1;
     game.rpsNote = "Tie! Choose again.";
     return { ok: true, tie: true };
   }
@@ -275,6 +277,7 @@ export function publicTTT(game) {
     players: game.players,
     symbols: Object.fromEntries(game.players.map((p) => [p, symbolOf(game, p)])),
     rps: {
+      round: game.rpsRound || 0,
       chosen: Object.fromEntries(game.players.map((p) => [p, !!game.rps[p]])),
       reveal: bothChosen || game.phase !== "rps" ? (bothChosen ? { ...game.rps } : game.lastRps) : null,
       lastRound: game.lastRps,
